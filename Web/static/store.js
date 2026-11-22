@@ -5,8 +5,8 @@
  *
  * Data model (persisted as one JSON blob in localStorage):
  *   users[]         { id, empId, username, email, password, name, role: 'nurse'|'chief', dept, leave{annual,sick,other}, active, ... }
- *   schedule        { [userId]: { 'YYYY-MM-DD': 'M'|'P'|'N'|'L' } }   (missing = day off)
- *   departments     { [name]: { name, min: { M, P, N } } }            (minimum staffing)
+ *   schedule        { [userId]: { 'YYYY-MM-DD': 'M'|'A'|'N'|'L' } }   (missing = day off)
+ *   departments     { [name]: { name, min: { M, A, N } } }            (minimum staffing)
  *   swaps[] leaves[] notifications[] settings{}
  *
  * To move to a real backend: keep the Store.* function signatures and replace
@@ -45,15 +45,15 @@
   };
 
   /* ---------- constants ---------- */
-  // Shift catalogue. Schedule cells store the id: 'M' | 'P' | 'N', or 'L' for approved leave.
+  // Shift catalogue. Schedule cells store the id: 'M' | 'A' | 'N', or 'L' for approved leave.
   // A missing entry means day off. startHour is used for .ics export.
   const SHIFTS = {
     M: { id: 'M', name: 'Morning Shift', label: 'Morning', time: '7:00 AM – 3:00 PM', startHour: 7, hours: 8 },
-    P: { id: 'P', name: 'Afternoon Shift', label: 'Afternoon', time: '3:00 PM – 11:00 PM', startHour: 15, hours: 8 },
+    A: { id: 'A', name: 'Afternoon Shift', label: 'Afternoon', time: '3:00 PM – 11:00 PM', startHour: 15, hours: 8 },
     N: { id: 'N', name: 'Night Shift', label: 'Night', time: '11:00 PM – 7:00 AM', startHour: 23, hours: 8 },
   };
-  const SHIFT_ORDER = ['M', 'P', 'N'];
-  const SHIFT_NAME = { M: 'Morning Shift', P: 'Afternoon Shift', N: 'Night Shift', L: 'On leave' };
+  const SHIFT_ORDER = ['M', 'A', 'N'];
+  const SHIFT_NAME = { M: 'Morning Shift', A: 'Afternoon Shift', N: 'Night Shift', L: 'On leave' };
   const LEAVE_TYPES = { annual: 'Annual Leave', sick: 'Sick Leave', other: 'VL/SL (Other)' };
   const SWAP_STATUS = {
     awaiting_colleague: ['Awaiting colleague', 'warn'],
@@ -66,14 +66,13 @@
   const LEAVE_STATUS = {
     pending: ['Pending', 'warn'], approved: ['Approved', 'ok'], rejected: ['Rejected', 'bad'], cancelled: ['Cancelled', 'muted'],
   };
-  // Department staffing rules: min = minimum nurses required per shift. Editable by the
-  // Chief Nurse in Settings; drives open-shift detection and the generator.
+  /*
   const DEFAULT_DEPTS = {
-    'OPD': { name: 'Outpatient Department', min: { M: 2, P: 1, N: 0 } },
-    'Emergency': { name: 'Emergency Department', min: { M: 1, P: 1, N: 1 } },
-    'Ward A': { name: 'Medical Ward A', min: { M: 1, P: 1, N: 1 } },
-    'Ward B': { name: 'Surgical Ward B', min: { M: 1, P: 1, N: 1 } },
-    'ICU': { name: 'Intensive Care Unit', min: { M: 1, P: 1, N: 1 } },
+    'OPD': { name: 'Outpatient Department', min: { M: 2, A: 1, N: 0 } },
+    'Emergency': { name: 'Emergency Department', min: { M: 1, A: 1, N: 1 } },
+    'Ward A': { name: 'Medical Ward A', min: { M: 1, A: 1, N: 1 } },
+    'Ward B': { name: 'Surgical Ward B', min: { M: 1, A: 1, N: 1 } },
+    'ICU': { name: 'Intensive Care Unit', min: { M: 1, A: 1, N: 1 } },
   };
   // Seed roster: [name, department, optional 'heavy']. 'heavy' nurses get extra night
   // shifts in seed() so the demo shows overtime and high-fatigue alerts.
@@ -85,9 +84,27 @@
     ['Patricia Lim', 'ICU'], ['Jose Aquino', 'Emergency', 'heavy'], ['Cathy Santiago', 'Ward A'], ['Dennis Pascual', 'Ward B'],
     ['Faith Castillo', 'ICU'], ['Noel Rivera', 'ICU'], ['Ana Mercado', 'OPD'], ['Ben Soriano', 'Ward A'],
   ];
-  const isWork = (s) => s === 'M' || s === 'P' || s === 'N';
-  const clone = (o) => JSON.parse(JSON.stringify(o));
+  */
+  
 
+  try{
+    const response = fetch("/dashboard/fetchData");
+    const data =  response.json()
+    return data
+  }
+  catch(error){
+    console.error('Error:', error);
+  }
+  
+  const retrievedData = fetchData().then()
+  const DEFAULT_DEPTS = retrievedData.DEFAULT_DEPTS;
+  const ROSTER = retrievedData.ROSTER;
+  console.log(retrievedData)
+  console.log(DEFAULT_DEPTS)
+  console.log(ROSTER)
+  const isWork = (s) => s === 'M' || s === 'A' || s === 'N';
+  const clone = (o) => JSON.parse(JSON.stringify(o));
+  
   /* ---------- scheduling engine ---------- */
   // Scheduling rules engine. Works on a schedule object ({ [userId]: { [date]: shift } }).
   //   violations(id, date, shift) -> human-readable rule breaks (rest, streak, weekly cap)
@@ -101,7 +118,8 @@
     const get = (id, d) => (sched[id] && sched[id][d]) || null;
     const set = (id, d, s) => { (sched[id] = sched[id] || {})[d] = s; };
     const weekCount = (id, d) => {
-      const s = D.startOfWeek(d); let c = 0;
+      const s = D.startOfWeek(d); 
+      let c = 0;
       for (let i = 0; i < 7; i++) if (isWork(get(id, D.addDays(s, i)))) c++;
       return c;
     };
@@ -110,9 +128,9 @@
       const v = [];
       const prev = get(id, D.addDays(d, -1)); const next = get(id, D.addDays(d, 1));
       if (prev === 'N' && sh !== 'N') v.push('Less than 11 hours of rest after the previous night shift.');
-      if (prev === 'P' && sh === 'M') v.push('Less than 11 hours of rest after the previous afternoon shift.');
+      if (prev === 'A' && sh === 'M') v.push('Less than 11 hours of rest after the previous afternoon shift.');
       if (sh === 'N' && isWork(next) && next !== 'N') v.push('The shift on the next day would start without enough rest.');
-      if (sh === 'P' && next === 'M') v.push('The morning shift on the next day would start without enough rest.');
+      if (sh === 'A' && next === 'M') v.push('The morning shift on the next day would start without enough rest.');
       let before = 0; while (isWork(get(id, D.addDays(d, -1 - before))) && before < 10) before++;
       let after = 0; while (isWork(get(id, D.addDays(d, 1 + after))) && after < 10) after++;
       if (before + 1 + after > o.maxConsecutive) v.push(`This creates ${before + 1 + after} working days in a row (limit ${o.maxConsecutive}).`);
@@ -153,7 +171,7 @@
     days.forEach((d) => { const s = row[d]; if (isWork(s)) { shifts++; hours += SHIFTS[s].hours; if (s === 'N') nights++; } });
     D.range(D.addDays(start, -3), end).forEach((d) => {
       const s = row[d]; const p = row[D.addDays(d, -1)];
-      if (isWork(s)) { cur++; streak = Math.max(streak, cur); if ((p === 'N' && s !== 'N') || (p === 'P' && s === 'M')) rot++; } else cur = 0;
+      if (isWork(s)) { cur++; streak = Math.max(streak, cur); if ((p === 'N' && s !== 'N') || (p === 'A' && s === 'M')) rot++; } else cur = 0;
     });
     const weeklyHours = hours * f;
     const overtime = Math.max(0, Math.round(hours - 40 / f));
@@ -179,7 +197,7 @@
       Object.keys(st.departments).forEach((dp) => {
         if (o.dept !== 'all' && dp !== o.dept) return;
         const pool = nurses.filter((n) => n.dept === dp);
-        ['N', 'P', 'M'].forEach((sh) => {
+        ['N', 'A', 'M'].forEach((sh) => {
           const need = st.departments[dp].min[sh] || 0;
           let have = pool.filter((n) => eng.get(n.id, d) === sh).length;
           while (have < need) {
@@ -252,8 +270,16 @@
     try { const raw = localStorage.getItem(KEY); if (raw) { const s = JSON.parse(raw); if (s.version === VERSION) return s; } } catch (e) { /* ignore */ }
     const s = seed(); persist(s); return s;
   }
-  function persist(s) { try { localStorage.setItem(KEY, JSON.stringify(s)); } catch (e) { /* storage full or blocked */ } }
-  function commit(mut) { const r = mut(state); state = Object.assign({}, state); persist(state); subs.forEach((f) => f()); return r; }
+  function persist(s) { 
+    try { localStorage.setItem(KEY, JSON.stringify(s)); } 
+    catch (e) { /* storage full or blocked */ } 
+  }
+  function commit(mut) { 
+    const r = mut(state); 
+    state = Object.assign({}, state); 
+    persist(state); 
+    subs.forEach((f) => f()); 
+    return r; }
   if (typeof addEventListener === 'function') {
     addEventListener('storage', (e) => { if (e.key === KEY) { state = load(); subs.forEach((f) => f()); } });
   }
@@ -464,7 +490,7 @@
     },
 
     /* scheduling (chief nurse) */
-    // Manual assignment (chief nurse). shift = 'M'|'P'|'N'|'L' or null for day off.
+    // Manual assignment (chief nurse). shift = 'M'|'A'|'N'|'L' or null for day off.
     setShift(uid, date, shift, actorId) {
       return commit((s) => {
         s.schedule[uid] = s.schedule[uid] || {};
