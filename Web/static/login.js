@@ -8,8 +8,6 @@
 
   // // Where each role lands after signing in; already-signed-in users skip the form.
   const home = (u) => (u.role === 'chief' ? 'chief.html' : 'nurse.html');
-  const existing = Store.currentUser();
-  if (existing) { location.replace(home(existing)); }
 
   // // Demo credentials for the "Use demo account" shortcut. Remove for production.
   const DEMO = { nurse: { id: 'sarah', pw: 'nurse123', label: 'Nurse Sarah' }, chief: { id: 'chief', pw: 'chief123', label: 'Chief Nurse Ianne' } };
@@ -77,5 +75,15 @@
       <${ToastHost}/>
     </div>`;
   }
-  if (!existing) ReactDOM.createRoot(document.getElementById('root')).render(html`<${App}/>`);
+  Store.ready.then(() => {
+    const existing = Store.currentUser();
+    if (existing) {
+      location.replace(home(existing));
+      return;
+    }
+    ReactDOM.createRoot(document.getElementById('root')).render(html`<${App}/>`);
+  }).catch((error) => {
+    console.error('Unable to initialize the store:', error);
+    document.getElementById('root').textContent = 'Unable to load application data.';
+  });
 })();

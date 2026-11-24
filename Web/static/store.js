@@ -9,8 +9,8 @@
  *   departments     { [name]: { name, min: { M, A, N } } }            (minimum staffing)
  *   swaps[] leaves[] notifications[] settings{}
  *
- * To move to a real backend: keep the Store.* function signatures and replace
- * commit()/load()/persist() with API calls; the React code will not need to change.
+ * The Flask mock-data endpoint supplies seed data only. App state and subsequent
+ * changes remain in localStorage until the store is backed by a persistence API.
  */
 (function (global) {
   'use strict';
@@ -66,42 +66,7 @@
   const LEAVE_STATUS = {
     pending: ['Pending', 'warn'], approved: ['Approved', 'ok'], rejected: ['Rejected', 'bad'], cancelled: ['Cancelled', 'muted'],
   };
-  /*
-  const DEFAULT_DEPTS = {
-    'OPD': { name: 'Outpatient Department', min: { M: 2, A: 1, N: 0 } },
-    'Emergency': { name: 'Emergency Department', min: { M: 1, A: 1, N: 1 } },
-    'Ward A': { name: 'Medical Ward A', min: { M: 1, A: 1, N: 1 } },
-    'Ward B': { name: 'Surgical Ward B', min: { M: 1, A: 1, N: 1 } },
-    'ICU': { name: 'Intensive Care Unit', min: { M: 1, A: 1, N: 1 } },
-  };
-  // Seed roster: [name, department, optional 'heavy']. 'heavy' nurses get extra night
-  // shifts in seed() so the demo shows overtime and high-fatigue alerts.
-  const ROSTER = [
-    ['Sarah Wilson', 'OPD'], ['Aaron Vigan', 'Emergency'], ['Clara Ramos', 'Ward A', 'heavy'], ['Maria Santos', 'OPD'],
-    ['Roberto Cruz', 'Emergency'], ['Elena Singson', 'Ward B', 'heavy'], ['Joy Dela Cruz', 'ICU'], ['Miguel Torres', 'OPD'],
-    ['Angela Reyes', 'Emergency'], ['Paolo Mendoza', 'Ward A'], ['Liza Navarro', 'Ward B'], ['Carlo Bautista', 'ICU'],
-    ['Jenny Garcia', 'OPD'], ['Rico Fernandez', 'Emergency'], ['Hannah Domingo', 'Ward A'], ['Mark Villanueva', 'Ward B'],
-    ['Patricia Lim', 'ICU'], ['Jose Aquino', 'Emergency', 'heavy'], ['Cathy Santiago', 'Ward A'], ['Dennis Pascual', 'Ward B'],
-    ['Faith Castillo', 'ICU'], ['Noel Rivera', 'ICU'], ['Ana Mercado', 'OPD'], ['Ben Soriano', 'Ward A'],
-  ];
-  */
   
-
-  try{
-    const response = fetch("/dashboard/fetchData");
-    const data =  response.json()
-    return data
-  }
-  catch(error){
-    console.error('Error:', error);
-  }
-  
-  const retrievedData = fetchData().then()
-  const DEFAULT_DEPTS = retrievedData.DEFAULT_DEPTS;
-  const ROSTER = retrievedData.ROSTER;
-  console.log(retrievedData)
-  console.log(DEFAULT_DEPTS)
-  console.log(ROSTER)
   const isWork = (s) => s === 'M' || s === 'A' || s === 'N';
   const clone = (o) => JSON.parse(JSON.stringify(o));
   
@@ -221,8 +186,16 @@
   /* ---------- seed ---------- */
   // Builds the demo dataset: users, a generated schedule (-45 to +120 days around today),
   // plus a few pending swap/leave requests and notifications so every screen has content.
-  function seed() {
+  async function seed() {
     const t = D.today();
+
+    //Fetch data from Flask
+    const response = await fetch('/dashboard/fetchData');
+    //Check if fetch was successful
+    if (!response.ok) throw new Error(`Fetch failed: ${response.status}`);
+    const { DEFAULT_DEPTS, ROSTER } = await response.json();
+
+    // State
     const st = { version: VERSION, seq: 100, users: [], schedule: {}, departments: clone(DEFAULT_DEPTS), swaps: [], leaves: [], notifications: [], settings: {} };
     st.users.push({ id: 'c1', empId: 'MVH-0001', username: 'chief', email: 'ianne.magsino@metrovigan.ph', password: 'chief123', name: 'Ianne Magsino', role: 'chief', dept: 'Administration', phone: '+63 917 555 0001', active: true, title: 'Chief Nurse', leave: { annual: 15, sick: 7, other: 3 } });
     ROSTER.forEach(([name, dept, load], i) => {
@@ -264,11 +237,20 @@
   // In-memory state + tiny pub/sub store. commit() mutates, saves to localStorage and
   // notifies subscribers. React components read it through UI.useStore()
   // (useSyncExternalStore) and must treat state as read-only; always mutate via Store.* actions.
-  let state = load();
+  let state;
   const subs = new Set();
-  function load() {
-    try { const raw = localStorage.getItem(KEY); if (raw) { const s = JSON.parse(raw); if (s.version === VERSION) return s; } } catch (e) { /* ignore */ }
-    const s = seed(); persist(s); return s;
+  async function load() {
+    try { 
+      const raw = localStorage.getItem(KEY); 
+      if (raw) 
+        { const s = JSON.parse(raw); 
+          if (s.version === VERSION) return s; 
+        } 
+      } 
+      catch (e) { /* ignore */ }
+    const s = await seed(); 
+    persist(s); 
+    return s;
   }
   function persist(s) { 
     try { localStorage.setItem(KEY, JSON.stringify(s)); } 
@@ -281,8 +263,19 @@
     subs.forEach((f) => f()); 
     return r; }
   if (typeof addEventListener === 'function') {
-    addEventListener('storage', (e) => { if (e.key === KEY) { state = load(); subs.forEach((f) => f()); } });
+    addEventListener('storage', (e) => {
+      if (e.key === KEY) {
+        load().then((nextState) => {
+          state = nextState;
+          subs.forEach((f) => f());
+        }).catch((error) => console.error('Could not reload saved schedule data.', error));
+      }
+    });
   }
+  const ready = load().then((initialState) => {
+  state = initialState;
+  return state;
+  });
 
   const ok = (extra) => Object.assign({ ok: true }, extra);
   const fail = (error) => ({ ok: false, error });
@@ -323,6 +316,7 @@
   // (the UI shows `error` to the user). Actions are grouped: auth, notifications, swaps,
   // leave, scheduling (chief nurse), staff management.
   const api = {
+    ready,
     Dates: D, SHIFTS, SHIFT_ORDER, SHIFT_NAME, LEAVE_TYPES, SWAP_STATUS, LEAVE_STATUS, isWork, label, first,
     getState: () => state,
     subscribe: (f) => { subs.add(f); return () => subs.delete(f); },
@@ -551,8 +545,6 @@
         s.notifications = s.notifications.filter((n) => n.uid !== uid);
       });
     },
-    // Wipes everything and re-seeds. Used by Settings > Reset demo data.
-    resetData() { state = seed(); persist(state); subs.forEach((f) => f()); },
   };
 
   global.Store = api;

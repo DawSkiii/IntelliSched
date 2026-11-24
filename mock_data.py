@@ -40,6 +40,9 @@ ROSTER = [
 def nest_dicts() -> dict:
     """
     Returns all mock data as a nested dictionary for sending
+    Order:
+    DEFAULT_DEPTS
+    ROSTER
     """
     return {'DEFAULT_DEPTS': DEFAULT_DEPTS,
             'ROSTER' : ROSTER}

@@ -9,9 +9,6 @@
   const { html, cx, Icon, useStore, useHash, toast, confirm, Modal, Field, Segmented, Toggle, Pill, SwapPill, LeavePill, ShiftBadge, ShiftTag, Empty, PageHead, MonthGrid, WeekStrip, Shell, ProfileForm, PasswordForm, download } = UI;
   const { Dates: D, SHIFTS, SHIFT_ORDER, SHIFT_NAME, LEAVE_TYPES, isWork } = Store;
 
-  const me0 = Store.currentUser();
-  if (!me0) location.replace('login.html'); else if (me0.role !== 'nurse') location.replace('chief.html');
-
   // // Sidebar views; the active one is kept in the URL hash (#dashboard, #swap, ...).
   const VIEWS = ['dashboard', 'schedule', 'swap', 'leave', 'profile', 'settings'];
   const opt = (d, s) => `${D.medium(d)} · ${SHIFTS[s].label}`;
@@ -222,5 +219,19 @@
     const V = { dashboard: Dashboard, schedule: ScheduleView, swap: SwapView, leave: LeaveView, profile: ProfileView, settings: SettingsView }[view];
     return html`<${Shell} user=${me} nav=${nav} view=${view} onNav=${setView}><${V} me=${me} go=${setView}/><//>`;
   }
-  if (me0 && me0.role === 'nurse') ReactDOM.createRoot(document.getElementById('root')).render(html`<${App}/>`);
+  Store.ready.then(() => {
+    const me0 = Store.currentUser();
+    if (!me0) {
+      location.replace('login.html');
+      return;
+    }
+    if (me0.role !== 'nurse') {
+      location.replace('chief.html');
+      return;
+    }
+    ReactDOM.createRoot(document.getElementById('root')).render(html`<${App}/>`);
+  }).catch((error) => {
+    console.error('Unable to initialize the store:', error);
+    document.getElementById('root').textContent = 'Unable to load application data.';
+  });
 })();
