@@ -5,12 +5,12 @@
  *
  * Data model (persisted as one JSON blob in localStorage):
  *   users[]         { id, empId, username, email, password, name, role: 'nurse'|'chief', dept, leave{annual,sick,other}, active, ... }
- *   schedule        { [userId]: { 'YYYY-MM-DD': 'M'|'P'|'N'|'L' } }   (missing = day off)
- *   departments     { [name]: { name, min: { M, P, N } } }            (minimum staffing)
+ *   schedule        { [userId]: { 'YYYY-MM-DD': 'M'|'A'|'N'|'L' } }   (missing = day off)
+ *   departments     { [name]: { name, min: { M, A, N } } }            (minimum staffing)
  *   swaps[] leaves[] notifications[] settings{}
  *
- * To move to a real backend: keep the Store.* function signatures and replace
- * commit()/load()/persist() with API calls; the React code will not need to change.
+ * The Flask mock-data endpoint supplies seed data only. App state and subsequent
+ * changes remain in localStorage until the store is backed by a persistence API.
  */
 (function (global) {
   'use strict';
@@ -45,15 +45,15 @@
   };
 
   /* ---------- constants ---------- */
-  // Shift catalogue. Schedule cells store the id: 'M' | 'P' | 'N', or 'L' for approved leave.
+  // Shift catalogue. Schedule cells store the id: 'M' | 'A' | 'N', or 'L' for approved leave.
   // A missing entry means day off. startHour is used for .ics export.
   const SHIFTS = {
     M: { id: 'M', name: 'Morning Shift', label: 'Morning', time: '7:00 AM – 3:00 PM', startHour: 7, hours: 8 },
-    P: { id: 'P', name: 'Afternoon Shift', label: 'Afternoon', time: '3:00 PM – 11:00 PM', startHour: 15, hours: 8 },
+    A: { id: 'A', name: 'Afternoon Shift', label: 'Afternoon', time: '3:00 PM – 11:00 PM', startHour: 15, hours: 8 },
     N: { id: 'N', name: 'Night Shift', label: 'Night', time: '11:00 PM – 7:00 AM', startHour: 23, hours: 8 },
   };
-  const SHIFT_ORDER = ['M', 'P', 'N'];
-  const SHIFT_NAME = { M: 'Morning Shift', P: 'Afternoon Shift', N: 'Night Shift', L: 'On leave' };
+  const SHIFT_ORDER = ['M', 'A', 'N'];
+  const SHIFT_NAME = { M: 'Morning Shift', A: 'Afternoon Shift', N: 'Night Shift', L: 'On leave' };
   const LEAVE_TYPES = { annual: 'Annual Leave', sick: 'Sick Leave', other: 'VL/SL (Other)' };
   const SWAP_STATUS = {
     awaiting_colleague: ['Awaiting colleague', 'warn'],
@@ -66,28 +66,10 @@
   const LEAVE_STATUS = {
     pending: ['Pending', 'warn'], approved: ['Approved', 'ok'], rejected: ['Rejected', 'bad'], cancelled: ['Cancelled', 'muted'],
   };
-  // Department staffing rules: min = minimum nurses required per shift. Editable by the
-  // Chief Nurse in Settings; drives open-shift detection and the generator.
-  const DEFAULT_DEPTS = {
-    'OPD': { name: 'Outpatient Department', min: { M: 2, P: 1, N: 0 } },
-    'Emergency': { name: 'Emergency Department', min: { M: 1, P: 1, N: 1 } },
-    'Ward A': { name: 'Medical Ward A', min: { M: 1, P: 1, N: 1 } },
-    'Ward B': { name: 'Surgical Ward B', min: { M: 1, P: 1, N: 1 } },
-    'ICU': { name: 'Intensive Care Unit', min: { M: 1, P: 1, N: 1 } },
-  };
-  // Seed roster: [name, department, optional 'heavy']. 'heavy' nurses get extra night
-  // shifts in seed() so the demo shows overtime and high-fatigue alerts.
-  const ROSTER = [
-    ['Sarah Wilson', 'OPD'], ['Aaron Vigan', 'Emergency'], ['Clara Ramos', 'Ward A', 'heavy'], ['Maria Santos', 'OPD'],
-    ['Roberto Cruz', 'Emergency'], ['Elena Singson', 'Ward B', 'heavy'], ['Joy Dela Cruz', 'ICU'], ['Miguel Torres', 'OPD'],
-    ['Angela Reyes', 'Emergency'], ['Paolo Mendoza', 'Ward A'], ['Liza Navarro', 'Ward B'], ['Carlo Bautista', 'ICU'],
-    ['Jenny Garcia', 'OPD'], ['Rico Fernandez', 'Emergency'], ['Hannah Domingo', 'Ward A'], ['Mark Villanueva', 'Ward B'],
-    ['Patricia Lim', 'ICU'], ['Jose Aquino', 'Emergency', 'heavy'], ['Cathy Santiago', 'Ward A'], ['Dennis Pascual', 'Ward B'],
-    ['Faith Castillo', 'ICU'], ['Noel Rivera', 'ICU'], ['Ana Mercado', 'OPD'], ['Ben Soriano', 'Ward A'],
-  ];
-  const isWork = (s) => s === 'M' || s === 'P' || s === 'N';
+  
+  const isWork = (s) => s === 'M' || s === 'A' || s === 'N';
   const clone = (o) => JSON.parse(JSON.stringify(o));
-
+  
   /* ---------- scheduling engine ---------- */
   // Scheduling rules engine. Works on a schedule object ({ [userId]: { [date]: shift } }).
   //   violations(id, date, shift) -> human-readable rule breaks (rest, streak, weekly cap)
@@ -101,7 +83,8 @@
     const get = (id, d) => (sched[id] && sched[id][d]) || null;
     const set = (id, d, s) => { (sched[id] = sched[id] || {})[d] = s; };
     const weekCount = (id, d) => {
-      const s = D.startOfWeek(d); let c = 0;
+      const s = D.startOfWeek(d); 
+      let c = 0;
       for (let i = 0; i < 7; i++) if (isWork(get(id, D.addDays(s, i)))) c++;
       return c;
     };
@@ -110,9 +93,9 @@
       const v = [];
       const prev = get(id, D.addDays(d, -1)); const next = get(id, D.addDays(d, 1));
       if (prev === 'N' && sh !== 'N') v.push('Less than 11 hours of rest after the previous night shift.');
-      if (prev === 'P' && sh === 'M') v.push('Less than 11 hours of rest after the previous afternoon shift.');
+      if (prev === 'A' && sh === 'M') v.push('Less than 11 hours of rest after the previous afternoon shift.');
       if (sh === 'N' && isWork(next) && next !== 'N') v.push('The shift on the next day would start without enough rest.');
-      if (sh === 'P' && next === 'M') v.push('The morning shift on the next day would start without enough rest.');
+      if (sh === 'A' && next === 'M') v.push('The morning shift on the next day would start without enough rest.');
       let before = 0; while (isWork(get(id, D.addDays(d, -1 - before))) && before < 10) before++;
       let after = 0; while (isWork(get(id, D.addDays(d, 1 + after))) && after < 10) after++;
       if (before + 1 + after > o.maxConsecutive) v.push(`This creates ${before + 1 + after} working days in a row (limit ${o.maxConsecutive}).`);
@@ -153,7 +136,7 @@
     days.forEach((d) => { const s = row[d]; if (isWork(s)) { shifts++; hours += SHIFTS[s].hours; if (s === 'N') nights++; } });
     D.range(D.addDays(start, -3), end).forEach((d) => {
       const s = row[d]; const p = row[D.addDays(d, -1)];
-      if (isWork(s)) { cur++; streak = Math.max(streak, cur); if ((p === 'N' && s !== 'N') || (p === 'P' && s === 'M')) rot++; } else cur = 0;
+      if (isWork(s)) { cur++; streak = Math.max(streak, cur); if ((p === 'N' && s !== 'N') || (p === 'A' && s === 'M')) rot++; } else cur = 0;
     });
     const weeklyHours = hours * f;
     const overtime = Math.max(0, Math.round(hours - 40 / f));
@@ -179,7 +162,7 @@
       Object.keys(st.departments).forEach((dp) => {
         if (o.dept !== 'all' && dp !== o.dept) return;
         const pool = nurses.filter((n) => n.dept === dp);
-        ['N', 'P', 'M'].forEach((sh) => {
+        ['N', 'A', 'M'].forEach((sh) => {
           const need = st.departments[dp].min[sh] || 0;
           let have = pool.filter((n) => eng.get(n.id, d) === sh).length;
           while (have < need) {
@@ -203,8 +186,16 @@
   /* ---------- seed ---------- */
   // Builds the demo dataset: users, a generated schedule (-45 to +120 days around today),
   // plus a few pending swap/leave requests and notifications so every screen has content.
-  function seed() {
+  async function seed() {
     const t = D.today();
+
+    //Fetch data from Flask
+    const response = await fetch('/dashboard/fetchData');
+    //Check if fetch was successful
+    if (!response.ok) throw new Error(`Fetch failed: ${response.status}`);
+    const { DEFAULT_DEPTS, ROSTER } = await response.json();
+
+    // State
     const st = { version: VERSION, seq: 100, users: [], schedule: {}, departments: clone(DEFAULT_DEPTS), swaps: [], leaves: [], notifications: [], settings: {} };
     st.users.push({ id: 'c1', empId: 'MVH-0001', username: 'chief', email: 'ianne.magsino@metrovigan.ph', password: 'chief123', name: 'Ianne Magsino', role: 'chief', dept: 'Administration', phone: '+63 917 555 0001', active: true, title: 'Chief Nurse', leave: { annual: 15, sick: 7, other: 3 } });
     ROSTER.forEach(([name, dept, load], i) => {
@@ -246,17 +237,45 @@
   // In-memory state + tiny pub/sub store. commit() mutates, saves to localStorage and
   // notifies subscribers. React components read it through UI.useStore()
   // (useSyncExternalStore) and must treat state as read-only; always mutate via Store.* actions.
-  let state = load();
+  let state;
   const subs = new Set();
-  function load() {
-    try { const raw = localStorage.getItem(KEY); if (raw) { const s = JSON.parse(raw); if (s.version === VERSION) return s; } } catch (e) { /* ignore */ }
-    const s = seed(); persist(s); return s;
+  async function load() {
+    try { 
+      const raw = localStorage.getItem(KEY); 
+      if (raw) 
+        { const s = JSON.parse(raw); 
+          if (s.version === VERSION) return s; 
+        } 
+      } 
+      catch (e) { /* ignore */ }
+    const s = await seed(); 
+    persist(s); 
+    return s;
   }
-  function persist(s) { try { localStorage.setItem(KEY, JSON.stringify(s)); } catch (e) { /* storage full or blocked */ } }
-  function commit(mut) { const r = mut(state); state = Object.assign({}, state); persist(state); subs.forEach((f) => f()); return r; }
+  function persist(s) { 
+    try { localStorage.setItem(KEY, JSON.stringify(s)); } 
+    catch (e) { /* storage full or blocked */ } 
+  }
+  function commit(mut) { 
+    const r = mut(state); 
+    state = Object.assign({}, state); 
+    persist(state); 
+    subs.forEach((f) => f()); 
+    return r; }
   if (typeof addEventListener === 'function') {
-    addEventListener('storage', (e) => { if (e.key === KEY) { state = load(); subs.forEach((f) => f()); } });
+    addEventListener('storage', (e) => {
+      if (e.key === KEY) {
+        load().then((nextState) => {
+          state = nextState;
+          subs.forEach((f) => f());
+        }).catch((error) => console.error('Could not reload saved schedule data.', error));
+      }
+    });
   }
+  const ready = load().then((initialState) => {
+  state = initialState;
+  return state;
+  });
 
   const ok = (extra) => Object.assign({ ok: true }, extra);
   const fail = (error) => ({ ok: false, error });
@@ -297,6 +316,7 @@
   // (the UI shows `error` to the user). Actions are grouped: auth, notifications, swaps,
   // leave, scheduling (chief nurse), staff management.
   const api = {
+    ready,
     Dates: D, SHIFTS, SHIFT_ORDER, SHIFT_NAME, LEAVE_TYPES, SWAP_STATUS, LEAVE_STATUS, isWork, label, first,
     getState: () => state,
     subscribe: (f) => { subs.add(f); return () => subs.delete(f); },
@@ -464,7 +484,7 @@
     },
 
     /* scheduling (chief nurse) */
-    // Manual assignment (chief nurse). shift = 'M'|'P'|'N'|'L' or null for day off.
+    // Manual assignment (chief nurse). shift = 'M'|'A'|'N'|'L' or null for day off.
     setShift(uid, date, shift, actorId) {
       return commit((s) => {
         s.schedule[uid] = s.schedule[uid] || {};
@@ -525,8 +545,6 @@
         s.notifications = s.notifications.filter((n) => n.uid !== uid);
       });
     },
-    // Wipes everything and re-seeds. Used by Settings > Reset demo data.
-    resetData() { state = seed(); persist(state); subs.forEach((f) => f()); },
   };
 
   global.Store = api;

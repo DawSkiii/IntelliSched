@@ -9,8 +9,6 @@
   const { html, cx, Icon, useStore, useHash, useClickAway, toast, confirm, Modal, Field, Segmented, Toggle, Avatar, Pill, SwapPill, LeavePill, ShiftBadge, ShiftTag, Empty, PageHead, Menu, Shell, ProfileForm, PasswordForm, download } = UI;
   const { Dates: D, SHIFTS, SHIFT_ORDER, SHIFT_NAME, LEAVE_TYPES, isWork } = Store;
 
-  const me0 = Store.currentUser();
-  if (!me0) location.replace('login.html'); else if (me0.role !== 'chief') location.replace('nurse.html');
   // // Sidebar views; kept in the URL hash. Dashboard filters (department + date range) live in App
   // // and are passed down as `f` so the Dashboard, Schedule Overview and Reports stay in sync.
   const VIEWS = ['dashboard', 'schedule', 'staff', 'generator', 'approvals', 'reports', 'settings'];
@@ -233,14 +231,8 @@
   }
 
   /* ----- settings ----- */
-  // // Minimum staffing per department/shift (drives open shifts and the generator), account forms, demo reset.
+  // // Minimum staffing per department/shift (drives open shifts and the generator), account forms.
   function SettingsView({ me }) {
-    const st = useStore();
-    const reset = async () => { if (await confirm({ title: 'Reset demo data?', message: 'This replaces all nurses, schedules and requests with fresh sample data and signs everyone out.', confirmLabel: 'Reset data', danger: true })) { Store.resetData(); Store.logout(); location.href = 'login.html'; } };
-    return html`<div><${PageHead} title="Settings" sub="Staffing rules drive open-shift detection and the shift generator."/>
-      <section className="card glass pad"><h3 className="card-title">Minimum nurses per shift</h3><div className="table-wrap"><table className="table"><thead><tr><th>Department</th>${SHIFT_ORDER.map((s) => html`<th key=${s}>${SHIFTS[s].label}</th>`)}</tr></thead><tbody>${Object.keys(st.departments).map((d) => html`<tr key=${d}><td><strong>${d}</strong><small className="note-s">${st.departments[d].name}</small></td>${SHIFT_ORDER.map((s) => html`<td key=${s}><input className="input num" type="number" min="0" max="9" aria-label=${`${d} ${SHIFTS[s].label} minimum`} value=${st.departments[d].min[s]} onChange=${(e) => Store.updateDeptMin(d, s, e.target.value)}/></td>`)}</tr>`)}</tbody></table></div></section>
-      <div className="split"><${ProfileForm} user=${me}/><${PasswordForm} user=${me}/></div>
-      <section className="card glass pad"><h3 className="card-title">Demo data</h3><p className="muted-p">All data lives in this browser. Reset to start over with sample staff and schedules.</p><button className="btn btn-danger" onClick=${reset}>Reset demo data</button></section></div>`;
   }
 
   /* ----- app ----- */
@@ -260,5 +252,19 @@
       ${detail && html`<${DetailModal} uid=${detail} range=${f.range} onClose=${() => setDetail(null)} onAssign=${(a) => { setDetail(null); setAssign(a); }}/>`}
       ${assign && html`<${AssignModal} target=${assign} me=${me} onClose=${() => setAssign(null)}/>`}<//>`;
   }
-  if (me0 && me0.role === 'chief') ReactDOM.createRoot(document.getElementById('root')).render(html`<${App}/>`);
+  Store.ready.then(() => {
+    const me0 = Store.currentUser();
+    if (!me0) {
+      location.replace('login.html');
+      return;
+    }
+    if (me0.role !== 'chief') {
+      location.replace('nurse.html');
+      return;
+    }
+    ReactDOM.createRoot(document.getElementById('root')).render(html`<${App}/>`);
+  }).catch((error) => {
+    console.error('Unable to initialize the store:', error);
+    document.getElementById('root').textContent = 'Unable to load application data.';
+  });
 })();
